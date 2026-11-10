@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Emma's Retirement Simulator</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap">
+<style>
+[hidden] { display: none !important; }
+img { max-width: 100%; }
+/* Layout: controls rail on the left, results (KPIs → histogram → percentile ladder) on the right; stacks on phones */
+:root {
+  --bg: #F3F5F4;
+  --surface: #FFFFFF;
+  --fg: #16201D;
+  --muted: #5C6B66;
+  --line: #DCE3E0;
+  --accent: #1E6B57;
+  --accent-soft: #E1EFEA;
+  --bar: #4E8F7D;
+  --goal: #C2410C;
+  --mean: #B7791F;
+  --median: #1E6B57;
+  --pct: #5C6B66;
+  --good: #1E7B4E;
+  --warn: #B45309;
+  --bad: #B42318;
+  --bad-soft: #FDECEA;
+  --display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0F1513; --surface: #17201D; --fg: #E6EEEB; --muted: #93A39D; --line: #2A3632;
+    --accent: #5CC3A3; --accent-soft: #1C332C; --bar: #3F8F79; --goal: #F97352; --mean: #E9B44C;
+    --median: #5CC3A3; --pct: #93A39D; --good: #4ADE9B; --warn: #F5B14C; --bad: #F87171; --bad-soft: #3A1C1A;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0F1513; --surface: #17201D; --fg: #E6EEEB; --muted: #93A39D; --line: #2A3632;
+  --accent: #5CC3A3; --accent-soft: #1C332C; --bar: #3F8F79; --goal: #F97352; --mean: #E9B44C;
+  --median: #5CC3A3; --pct: #93A39D; --good: #4ADE9B; --warn: #F5B14C; --bad: #F87171; --bad-soft: #3A1C1A;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 48px;
+}
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 24px; }
+header { display: grid; gap: 6px; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1 { font: 700 clamp(26px, 3.4vw, 38px)/1.1 var(--display); margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+.lede { color: var(--muted); margin: 0; max-width: 68ch; }
+h2 { font: 600 17px/1.2 var(--display); margin: 0; }
+
+.main { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 24px; align-items: start; }
+@media (max-width: 900px) { .main { grid-template-columns: minmax(0, 1fr); } }
+
+/* Controls */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+form.controls { display: grid; gap: 18px; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 16px); }
+@media (max-width: 900px) { form.controls { position: static; } }
+.group { display: grid; gap: 14px; }
+.group-title { font: 500 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.field { display: grid; gap: 6px; min-width: 0; }
+.field label, .field .lbl { font-size: 13px; font-weight: 500; }
+.field .hint { font-size: 12px; color: var(--muted); }
+input[type="number"], select {
+  width: 100%; font: 400 15px var(--mono); color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-variant-numeric: tabular-nums;
+}
+input[type="number"]:focus-visible, select:focus-visible, input[type="range"]:focus-visible, button:focus-visible, .seg input:focus-visible + span {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+input.invalid { border-color: var(--bad); }
+.money { position: relative; }
+.money::before { content: "$"; position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font: 400 15px var(--mono); color: var(--muted); }
+.money input { padding-left: 22px; }
+.pctwrap { position: relative; }
+.pctwrap::after { content: "%"; position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font: 400 15px var(--mono); color: var(--muted); }
+.pctwrap input { padding-right: 26px; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg label { position: relative; cursor: pointer; }
+.seg input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
+.seg span { display: block; text-align: center; padding: 8px 6px; font-size: 13px; color: var(--muted); background: var(--bg); }
+.seg label + label span { border-left: 1px solid var(--line); }
+.seg input:checked + span { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.range-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.range-head output { font: 500 15px var(--mono); font-variant-numeric: tabular-nums; }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+.ticks { display: flex; justify-content: space-between; font: 400 11px var(--mono); color: var(--muted); }
+.reset { background: none; border: 0; color: var(--accent); font: 500 13px var(--body); cursor: pointer; padding: 0; justify-self: start; text-decoration: underline; text-underline-offset: 3px; }
+button.run {
+  width: 100%; font: 600 16px var(--display); letter-spacing: .01em; color: var(--surface); background: var(--accent);
+  border: 0; border-radius: 8px; padding: 13px 16px; cursor: pointer; transition: filter .15s;
+}
+button.run:hover { filter: brightness(1.08); }
+button.run:disabled { opacity: .6; cursor: progress; }
+
+.alert[hidden], .tip[hidden] { display: none; }
+.alert { display: flex; gap: 10px; align-items: flex-start; background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); border-radius: 8px; padding: 12px 14px; font-weight: 500; font-size: 14px; }
+.alert svg { flex: none; margin-top: 2px; }
+
+/* Results */
+.results { display: grid; gap: 20px; min-width: 0; }
+.status { display: flex; flex-wrap: wrap; gap: 8px 16px; font: 400 13px var(--mono); color: var(--muted); }
+.status b { color: var(--fg); font-weight: 500; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 12px; }
+@media (max-width: 400px) { .kpis { grid-template-columns: minmax(0, 1fr); } }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 4px; align-content: start; min-width: 0; }
+.kpi .k { font: 500 11px/1.3 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.kpi .v { font: 600 21px/1.15 var(--display); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kpi .s { font-size: 12px; color: var(--muted); }
+.kpi.hero { background: var(--accent-soft); border-color: transparent; }
+.pill { display: inline-block; font: 600 11px/1 var(--mono); letter-spacing: .04em; padding: 4px 7px; border-radius: 99px; justify-self: start; }
+.pill.good { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+.pill.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.pill.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+.kpi .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+
+.chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px 20px; align-items: baseline; margin-bottom: 12px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--muted); list-style: none; margin: 0; padding: 0; }
+.legend li { display: flex; align-items: center; gap: 6px; }
+.legend i { width: 18px; height: 0; border-top-width: 2px; border-top-color: currentColor; display: inline-block; }
+.canvas-box { position: relative; width: 100%; height: 380px; }
+@media (max-width: 560px) { .canvas-box { height: 300px; } }
+canvas { width: 100%; height: 100%; display: block; }
+.tip { position: absolute; pointer-events: none; background: var(--fg); color: var(--bg); font: 400 12px/1.45 var(--mono); padding: 7px 9px; border-radius: 6px; white-space: nowrap; transform: translate(-50%, calc(-100% - 10px)); }
+.foot { font-size: 12.5px; color: var(--muted); margin: 10px 0 0; }
+
+.two { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 1050px) { .two { grid-template-columns: minmax(0, 1fr); } }
+.tbl-wrap { overflow-x: auto; margin-top: 12px; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13.5px; }
+th { text-align: right; font: 500 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
+th:first-child, td:first-child { text-align: left; }
+td { white-space: nowrap; text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line); font-family: var(--mono); }
+tr.hit td { color: var(--accent); }
+tr.below td:last-child { color: var(--bad); }
+tr.goalrow td { background: var(--accent-soft); font-weight: 500; }
+.formula { font: 400 13px/1.6 var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; overflow-x: auto; white-space: nowrap; }
+.notes { display: grid; gap: 10px; font-size: 13.5px; }
+.notes p { margin: 0; }
+.cmp td:nth-child(2), .cmp td:nth-child(3) { white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">MiniProject 2 · Monte Carlo retirement simulation</div>
+    <h1>Will the savings plan reach the goal?</h1>
+    <p class="lede">Each simulation draws a random S&amp;P 500 return for every year from a normal distribution, adds the yearly contribution, and records wealth at retirement. Defaults are Emma's plan: age 30 to 65, $12,000 a year, a $1.5 million goal.</p>
+  </header>
+
+  <div class="main">
+    <form class="controls panel" id="controls" novalidate>
+      <div class="group">
+        <div class="group-title">Saver</div>
+        <div class="row2">
+          <div class="field">
+            <label for="curAge">Current age</label>
+            <input type="number" id="curAge" min="18" max="80" step="1" value="30" inputmode="numeric">
+          </div>
+          <div class="field">
+            <label for="retAge">Retirement age</label>
+            <input type="number" id="retAge" min="19" max="100" step="1" value="65" inputmode="numeric">
+          </div>
+        </div>
+        <div class="field">
+          <label for="contrib">Annual contribution</label>
+          <div class="money"><input type="number" id="contrib" min="0" step="500" value="12000" inputmode="decimal"></div>
+        </div>
+        <div class="field">
+          <span class="lbl" id="timingLbl">Contribution timing</span>
+          <div class="seg" role="radiogroup" aria-labelledby="timingLbl">
+            <label><input type="radio" name="timing" id="timingBOY" value="boy" checked><span>Beginning of year</span></label>
+            <label><input type="radio" name="timing" id="timingEOY" value="eoy"><span>End of year</span></label>
+          </div>
+        </div>
+        <div class="field">
+          <label for="goal">Target wealth goal</label>
+          <div class="money"><input type="number" id="goal" min="0" step="50000" value="1500000" inputmode="decimal"></div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Market assumptions</div>
+        <div class="row2">
+          <div class="field">
+            <label for="mu">Mean return</label>
+            <div class="pctwrap"><input type="number" id="mu" step="0.01" value="10.16" inputmode="decimal"></div>
+          </div>
+          <div class="field">
+            <label for="sigma">Volatility</label>
+            <div class="pctwrap"><input type="number" id="sigma" min="0" step="0.01" value="15.90" inputmode="decimal"></div>
+          </div>
+        </div>
+        <div class="hint" style="font-size:12px;color:var(--muted)">From 49 years of S&amp;P 500 annual returns (1976–2024) in the notebook.</div>
+        <button type="button" class="reset" id="resetMarket">Reset to S&amp;P 500 history</button>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Simulation</div>
+        <div class="field">
+          <div class="range-head"><label for="nSims">Number of simulations</label><output id="nSimsOut" for="nSims">10,000</output></div>
+          <input type="range" id="nSims" min="1000" max="20000" step="1000" value="10000">
+          <div class="ticks"><span>1,000</span><span>20,000</span></div>
+        </div>
+        <div class="field">
+          <label for="seed">Random seed</label>
+          <input type="number" id="seed" step="1" value="414" inputmode="numeric">
+          <span class="hint">Same seed and inputs give the same results every run.</span>
+        </div>
+      </div>
+
+      <div class="alert" id="alert" role="alert" hidden>
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 4.2v4.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="11.4" r="1" fill="currentColor"/></svg>
+        <div id="alertText"></div>
+      </div>
+
+      <button type="submit" class="run" id="runBtn">Run Simulation</button>
+    </form>
+
+    <section class="results" aria-live="polite">
+      <div class="status" id="status"></div>
+
+      <div class="kpis">
+        <div class="kpi hero">
+          <div class="k">Chance of reaching goal</div>
+          <div class="v" id="kProb">–</div>
+          <span class="pill" id="kProbPill">–</span>
+        </div>
+        <div class="kpi">
+          <div class="k"><span class="dot" style="background:var(--mean)"></span>Mean wealth</div>
+          <div class="v" id="kMean">–</div>
+          <div class="s">Average of all outcomes</div>
+        </div>
+        <div class="kpi">
+          <div class="k"><span class="dot" style="background:var(--median)"></span>Median wealth</div>
+          <div class="v" id="kMedian">–</div>
+          <div class="s">50th percentile</div>
+        </div>
+        <div class="kpi">
+          <div class="k"><span class="dot" style="background:var(--pct)"></span>5th percentile</div>
+          <div class="v" id="kP5">–</div>
+          <div class="s">Bad-market outcome</div>
+        </div>
+        <div class="kpi">
+          <div class="k"><span class="dot" style="background:var(--pct)"></span>95th percentile</div>
+          <div class="v" id="kP95">–</div>
+          <div class="s">Strong-market outcome</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="chart-head">
+          <h2 id="chartTitle">Simulated wealth at retirement</h2>
+          <ul class="legend">
+            <li><i style="color:var(--goal);border-top-style:dashed"></i>Goal</li>
+            <li><i style="color:var(--mean);border-top-style:solid"></i>Mean</li>
+            <li><i style="color:var(--median);border-top-style:solid"></i>Median</li>
+            <li><i style="color:var(--pct);border-top-style:dotted"></i>5th / 95th pct</li>
+          </ul>
+        </div>
+        <div class="canvas-box" id="canvasBox">
+          <canvas id="hist" role="img" aria-label="Histogram of simulated retirement wealth"></canvas>
+          <div class="tip" id="tip" hidden></div>
+        </div>
+        <p class="foot" id="histFoot"></p>
+      </div>
+
+      <div class="two">
+        <div class="panel">
+          <h2>Percentile ladder</h2>
+          <div class="tbl-wrap">
+            <table id="ladder">
+              <thead><tr><th>Percentile</th><th>Outcome #</th><th>Wealth at retirement</th><th>vs. goal</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel notes">
+          <h2>How each year is calculated</h2>
+          <div class="formula" id="formula"></div>
+          <p id="formulaNote"></p>
+          <h2 style="margin-top:6px">Notebook results (Colab, NumPy seed 414)</h2>
+          <div class="tbl-wrap" style="margin-top:0">
+            <table class="cmp">
+              <thead><tr><th>Metric</th><th>Notebook</th><th>This run</th></tr></thead>
+              <tbody id="cmpBody"></tbody>
+            </table>
+          </div>
+          <p style="color:var(--muted);font-size:12.5px">With the default inputs, this page runs the same model as the notebook. The browser uses a different random number generator than NumPy, so each figure lands close to the notebook's but not on the same dollar.</p>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const DEF = { curAge: 30, retAge: 65, contrib: 12000, goal: 1500000, mu: 10.16, sigma: 15.90, nSims: 10000, seed: 414 };
+  const NOTEBOOK = { mean: 3743073, median: 2935467, prob: 0.8445, p5: 985614, p95: 9258524 };
+
+  const usd = v => (v < 0 ? "−$" : "$") + Math.round(Math.abs(v)).toLocaleString("en-US");
+  const usdShort = v => {
+    const a = Math.abs(v), s = v < 0 ? "−$" : "$";
+    if (a >= 1e9) return s + (a / 1e9).toFixed(2) + "B";
+    if (a >= 1e6) return s + (a / 1e6).toFixed(2) + "M";
+    if (a >= 1e3) return s + (a / 1e3).toFixed(0) + "K";
+    return s + a.toFixed(0);
+  };
+  const pctFmt = v => (v * 100).toFixed(2) + "%";
+
+  // Seeded RNG (mulberry32) + Box–Muller normal draws
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  function normalGen(rand) {
+    let spare = null;
+    return (mu, sigma) => {
+      if (spare !== null) { const z = spare; spare = null; return mu + sigma * z; }
+      let u = 0, v = 0;
+      while (u === 0) u = rand();
+      v = rand();
+      const r = Math.sqrt(-2 * Math.log(u)), th = 2 * Math.PI * v;
+      spare = r * Math.sin(th);
+      return mu + sigma * r * Math.cos(th);
+    };
+  }
+
+  function simulate(p) {
+    const years = p.retAge - p.curAge;
+    const normal = normalGen(mulberry32(p.seed >>> 0));
+    const out = new Float64Array(p.nSims);
+    for (let i = 0; i < p.nSims; i++) {
+      let w = 0;
+      for (let y = 0; y < years; y++) {
+        const r = normal(p.mu, p.sigma);
+        w = p.boy ? (w + p.contrib) * (1 + r) : w * (1 + r) + p.contrib;
+      }
+      out[i] = w;
+    }
+    return out;
+  }
+
+  // Percentile with linear interpolation (matches np.percentile default)
+  function percentile(sorted, q) {
+    const pos = (sorted.length - 1) * q / 100, lo = Math.floor(pos), hi = Math.ceil(pos);
+    return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+  }
+
+  function readInputs() {
+    const num = id => { const v = parseFloat($(id).value); return Number.isFinite(v) ? v : NaN; };
+    return {
+      curAge: num("curAge"), retAge: num("retAge"), contrib: num("contrib"), goal: num("goal"),
+      muPct: num("mu"), sigmaPct: num("sigma"), nSims: parseInt($("nSims").value, 10),
+      seed: Math.trunc(num("seed")), boy: $("timingBOY").checked
+    };
+  }
+
+  function validate(p) {
+    document.querySelectorAll("input.invalid").forEach(el => el.classList.remove("invalid"));
+    const errs = [];
+    const bad = (id, msg) => { $(id).classList.add("invalid"); errs.push(msg); };
+    if (!Number.isFinite(p.curAge) || p.curAge < 18 || p.curAge > 80) bad("curAge", "Current age must be between 18 and 80.");
+    if (!Number.isFinite(p.retAge) || p.retAge < 19 || p.retAge > 100) bad("retAge", "Retirement age must be between 19 and 100.");
+    if (Number.isFinite(p.curAge) && Number.isFinite(p.retAge) && p.retAge <= p.curAge) {
+      $("retAge").classList.add("invalid"); $("curAge").classList.add("invalid");
+      errs.unshift("Retirement age must be greater than current age.");
+    }
+    if (!Number.isFinite(p.contrib) || p.contrib < 0) bad("contrib", "Annual contribution cannot be negative.");
+    if (!Number.isFinite(p.goal) || p.goal < 0) bad("goal", "Target wealth goal cannot be negative.");
+    if (!Number.isFinite(p.muPct)) bad("mu", "Enter a mean annual return.");
+    if (!Number.isFinite(p.sigmaPct) || p.sigmaPct < 0) bad("sigma", "Volatility cannot be negative.");
+    if (!Number.isFinite(p.seed)) bad("seed", "Enter a whole number for the random seed.");
+    return errs;
+  }
+
+  let last = null;
+
+  function run(e) {
+    if (e) e.preventDefault();
+    const raw = readInputs();
+    const errs = validate(raw);
+    if (errs.length) {
+      $("alertText").innerHTML = errs.map(m => `<div>${m}</div>`).join("");
+      $("alert").hidden = false;
+      return;
+    }
+    $("alert").hidden = true;
+    const p = { ...raw, curAge: Math.round(raw.curAge), retAge: Math.round(raw.retAge), mu: raw.muPct / 100, sigma: raw.sigmaPct / 100 };
+    const btn = $("runBtn");
+    btn.disabled = true; btn.textContent = "Running…";
+    setTimeout(() => {
+      const t0 = performance.now();
+      const w = simulate(p);
+      const sorted = Float64Array.from(w).sort();
+      let sum = 0, hits = 0;
+      for (let i = 0; i < w.length; i++) { sum += w[i]; if (w[i] >= p.goal) hits++; }
+      last = {
+        p, sorted, ms: performance.now() - t0,
+        mean: sum / w.length, median: percentile(sorted, 50),
+        p5: percentile(sorted, 5), p95: percentile(sorted, 95), prob: hits / w.length
+      };
+      render();
+      btn.disabled = false; btn.textContent = "Run Simulation";
+    }, 20);
+  }
+
+  function render() {
+    const r = last, p = r.p, years = p.retAge - p.curAge;
+    $("status").innerHTML =
+      `<span><b>${years}</b> years · <b>${years}</b> contributions</span>` +
+      `<span>Total contributed <b>${usd(p.contrib * years)}</b></span>` +
+      `<span><b>${p.nSims.toLocaleString()}</b> simulations in ${r.ms.toFixed(0)} ms</span>`;
+    $("kProb").textContent = pctFmt(r.prob);
+    const pill = $("kProbPill");
+    pill.className = "pill " + (r.prob >= 0.8 ? "good" : r.prob >= 0.5 ? "warn" : "bad");
+    pill.textContent = r.prob >= 0.8 ? "Likely" : r.prob >= 0.5 ? "Coin flip" : "Unlikely";
+    $("kMean").textContent = usd(r.mean);
+    $("kMedian").textContent = usd(r.median);
+    $("kP5").textContent = usd(r.p5);
+    $("kP95").textContent = usd(r.p95);
+    $("chartTitle").textContent = `Simulated wealth at age ${p.retAge}`;
+
+    // Ladder
+    const tb = $("ladder").querySelector("tbody");
+    const rows = [];
+    for (let q = 5; q <= 100; q += 5) {
+      const pos = Math.max(1, Math.round(p.nSims * q / 100));
+      const v = r.sorted[pos - 1];
+      const ok = v >= p.goal;
+      rows.push(`<tr class="${ok ? "hit" : "below"}"><td>${q}%</td><td>${pos.toLocaleString()}</td><td>${usd(v)}</td><td>${ok ? "Reached" : "Short " + usdShort(p.goal - v)}</td></tr>`);
+    }
+    tb.innerHTML = rows.join("");
+
+    // Formula
+    $("formula").innerHTML = p.boy
+      ? `wealth = (wealth + ${usd(p.contrib)}) × (1 + r)`
+      : `wealth = wealth × (1 + r) + ${usd(p.contrib)}`;
+    $("formulaNote").textContent = `r is drawn each year from a normal distribution with mean ${p.muPct.toFixed(2)}% and volatility ${p.sigmaPct.toFixed(2)}%. ` +
+      (p.boy ? "The deposit goes in first, so it earns that year's return." : "The deposit goes in after the year's return, so it starts growing next year.");
+
+    // Comparison
+    const isDefault = p.curAge === DEF.curAge && p.retAge === DEF.retAge && p.contrib === DEF.contrib && p.goal === DEF.goal &&
+      p.muPct === DEF.mu && p.sigmaPct === DEF.sigma && p.nSims === DEF.nSims && p.boy;
+    const cmp = [["Mean", usd(NOTEBOOK.mean), usd(r.mean)], ["Median", usd(NOTEBOOK.median), usd(r.median)],
+      ["P(≥ goal)", pctFmt(NOTEBOOK.prob), pctFmt(r.prob)], ["5th pct", usd(NOTEBOOK.p5), usd(r.p5)], ["95th pct", usd(NOTEBOOK.p95), usd(r.p95)]];
+    $("cmpBody").innerHTML = cmp.map(c => `<tr><td>${c[0]}</td><td>${c[1]}</td><td>${isDefault ? c[2] : "<span style='color:var(--muted)'>inputs changed</span>"}</td></tr>`).join("");
+
+    drawHist();
+  }
+
+  // Histogram
+  const canvas = $("hist"), box = $("canvasBox"), tip = $("tip");
+  let geom = null;
+
+  function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+  function niceStep(range, target) {
+    const raw = range / target, mag = Math.pow(10, Math.floor(Math.log10(raw))), n = raw / mag;
+    return (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * mag;
+  }
+
+  function drawHist() {
+    if (!last) return;
+    const r = last, p = r.p, s = r.sorted;
+    const dpr = window.devicePixelRatio || 1;
+    const W = box.clientWidth, H = box.clientHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    const C = { fg: cssVar("--fg"), muted: cssVar("--muted"), line: cssVar("--line"), bar: cssVar("--bar"),
+      goal: cssVar("--goal"), mean: cssVar("--mean"), median: cssVar("--median"), pct: cssVar("--pct") };
+    const mono = "11px 'IBM Plex Mono', ui-monospace, monospace";
+
+    // Trim the far right tail at 99.9th percentile, as in the notebook
+    const lo = Math.min(0, s[0]);
+    const upper = Math.max(percentile(s, 99.9), p.goal * 1.05, lo + 1);
+    const nBins = W < 500 ? 50 : 100;
+    const bw = (upper - lo) / nBins;
+    const counts = new Array(nBins).fill(0);
+    let trimmed = 0;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] > upper) { trimmed++; continue; }
+      let b = Math.floor((s[i] - lo) / bw); if (b >= nBins) b = nBins - 1; if (b < 0) b = 0;
+      counts[b]++;
+    }
+    const maxC = Math.max(...counts, 1);
+
+    const padL = 52, padR = 14, padB = 38;
+    const pw = W - padL - padR;
+    const x = v => padL + (v - lo) / (upper - lo) * pw;
+
+    // Reference lines: place labels in rows above the plot so they never cover bars
+    const refs = [
+      { v: r.p5, c: C.pct, dash: [2, 3], label: "5th " + usdShort(r.p5) },
+      { v: r.median, c: C.median, dash: [], label: "Median " + usdShort(r.median) },
+      { v: r.mean, c: C.mean, dash: [], label: "Mean " + usdShort(r.mean) },
+      { v: p.goal, c: C.goal, dash: [6, 4], label: "Goal " + usdShort(p.goal) },
+      { v: r.p95, c: C.pct, dash: [2, 3], label: "95th " + usdShort(r.p95) },
+    ].filter(l => l.v >= lo && l.v <= upper).sort((a, b) => a.v - b.v);
+    ctx.font = "500 " + mono;
+    const rowEnds = [];
+    refs.forEach(l => {
+      l.px = Math.round(x(l.v)) + .5;
+      const tw = ctx.measureText(l.label).width;
+      let left = l.px + 5; if (left + tw > W - padR) left = l.px - 5 - tw;
+      let row = 0; while (rowEnds[row] !== undefined && rowEnds[row] > left - 10) row++;
+      rowEnds[row] = left + tw; l.left = left; l.row = row;
+    });
+    const nRows = Math.max(rowEnds.length, 1);
+    const padT = 8 + nRows * 16;
+    const ph = H - padT - padB;
+    const y = c => padT + ph - c / maxC * ph;
+
+    // Y grid
+    ctx.font = mono; ctx.textBaseline = "middle"; ctx.textAlign = "right";
+    const ys = niceStep(maxC, 4);
+    for (let c = 0; c <= maxC; c += ys) {
+      ctx.strokeStyle = C.line; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(padL, Math.round(y(c)) + .5); ctx.lineTo(W - padR, Math.round(y(c)) + .5); ctx.stroke();
+      ctx.fillStyle = C.muted; ctx.fillText(c.toLocaleString(), padL - 8, y(c));
+    }
+    // Bars
+    ctx.fillStyle = C.bar;
+    const barPx = pw / nBins;
+    for (let b = 0; b < nBins; b++) {
+      if (!counts[b]) continue;
+      const top = y(counts[b]);
+      ctx.fillRect(padL + b * barPx + 0.5, top, Math.max(barPx - 1, 1), padT + ph - top);
+    }
+    // X axis
+    ctx.strokeStyle = C.muted; ctx.beginPath(); ctx.moveTo(padL, padT + ph + .5); ctx.lineTo(W - padR, padT + ph + .5); ctx.stroke();
+    ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillStyle = C.muted;
+    const xs = niceStep(upper - lo, W < 500 ? 4 : 8);
+    for (let v = Math.ceil(lo / xs) * xs; v <= upper; v += xs) {
+      const px = x(v);
+      ctx.beginPath(); ctx.moveTo(px + .5, padT + ph); ctx.lineTo(px + .5, padT + ph + 4); ctx.stroke();
+      ctx.fillText(usdShort(v), px, padT + ph + 8);
+    }
+    ctx.save(); ctx.translate(12, padT + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("Simulations", 0, 0); ctx.restore();
+
+    // Draw reference lines and their labels
+    ctx.font = "500 " + mono; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
+    refs.forEach(l => {
+      const ty = 8 + l.row * 16 + 11;
+      ctx.strokeStyle = l.c; ctx.lineWidth = 2; ctx.setLineDash(l.dash);
+      ctx.beginPath(); ctx.moveTo(l.px, ty + 3); ctx.lineTo(l.px, padT + ph); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = l.c; ctx.fillText(l.label, l.left, ty);
+    });
+
+    geom = { padL, pw, padT, ph, nBins, barPx, lo, bw, counts };
+    $("histFoot").textContent = `${nBins} bins of ${usdShort(bw)} each. ` +
+      (trimmed ? `${trimmed.toLocaleString()} outcomes above ${usdShort(upper)} (the top 0.1%) are left off so the shape stays readable; the highest was ${usd(s[s.length - 1])}.` : "All outcomes shown.");
+  }
+
+  canvas.addEventListener("mousemove", ev => {
+    if (!geom) return;
+    const rect = canvas.getBoundingClientRect(), mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+    const b = Math.floor((mx - geom.padL) / geom.barPx);
+    if (b < 0 || b >= geom.nBins || my < geom.padT || my > geom.padT + geom.ph) { tip.hidden = true; return; }
+    const a = geom.lo + b * geom.bw, z = a + geom.bw;
+    tip.innerHTML = `${usdShort(a)} – ${usdShort(z)}<br>${geom.counts[b].toLocaleString()} simulations`;
+    tip.style.left = Math.min(Math.max(mx, 70), rect.width - 70) + "px"; tip.style.top = my + "px"; tip.hidden = false;
+  });
+  canvas.addEventListener("mouseleave", () => { tip.hidden = true; });
+
+  let rt; new ResizeObserver(() => { clearTimeout(rt); rt = setTimeout(drawHist, 60); }).observe(box);
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawHist);
+  new MutationObserver(drawHist).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+  $("nSims").addEventListener("input", () => { $("nSimsOut").textContent = parseInt($("nSims").value, 10).toLocaleString(); });
+  $("resetMarket").addEventListener("click", () => { $("mu").value = DEF.mu.toFixed(2); $("sigma").value = DEF.sigma.toFixed(2); });
+  $("controls").addEventListener("submit", run);
+
+  run();
+})();
+</script>
+
+</body>
+</html>
